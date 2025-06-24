@@ -16,7 +16,9 @@
 #include "4C_inpar_scatra.hpp"
 #include "4C_io_discretization_visualization_writer_mesh.hpp"
 #include "4C_io_runtime_csv_writer.hpp"
+#include "4C_linalg_multi_vector.hpp"
 #include "4C_linalg_serialdensevector.hpp"
+#include "4C_linalg_vector.hpp"
 #include "4C_utils_result_test.hpp"
 
 #include <memory>
@@ -998,6 +1000,10 @@ namespace ScaTra
     //! initialize meshtying strategy (including standard case without meshtying)
     virtual void create_meshtying_strategy();
 
+    //! initialize growth dofset for scatra-scatra simplified growth
+    //! modeling via S2IKinetics with Butler-Volmer as a kinetic model
+    void init_simplified_growth_dofset();
+
     /*--- calculate and update -----------------------------------------------*/
 
     //! apply Dirichlet boundary conditions to linear system of equations
@@ -1294,6 +1300,10 @@ namespace ScaTra
     //! flag for external force
     bool has_external_force_;
 
+    //! flag for simplified growth conditions (S2I Kinetics with
+    //! Butler-Volmer as kinetics model)
+    bool has_simplified_growth_conditions_;
+
     /*--- query and output ---------------------------------------------------*/
 
     //! flag for calculating flux vector field inside domain
@@ -1431,6 +1441,12 @@ namespace ScaTra
 
     //! relative errors of scalar fields in L2 and H1 norms
     std::shared_ptr<std::vector<double>> relerrors_;
+
+    //! simplified growth at time n
+    std::shared_ptr<Core::LinAlg::Vector<double>> simplgrowthn_;
+    //! simplified growth at time n+1
+    std::shared_ptr<Core::LinAlg::Vector<double>> simplgrowthnp_;
+
 
     /*========================================================================*/
     //! @name velocity, pressure, and related

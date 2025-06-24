@@ -9,8 +9,12 @@
 
 #include "4C_comm_utils_gid_vector.hpp"
 #include "4C_contact_nitsche_strategy_ssi.hpp"
+#include "4C_fem_condition.hpp"
 #include "4C_fem_condition_periodic.hpp"
 #include "4C_fem_condition_selector.hpp"
+#include "4C_fem_condition_utils.hpp"
+#include "4C_fem_discretization.hpp"
+#include "4C_fem_dofset_predefineddofnumber.hpp"
 #include "4C_fem_general_assemblestrategy.hpp"
 #include "4C_fem_nurbs_discretization.hpp"
 #include "4C_fem_nurbs_discretization_initial_condition.hpp"
@@ -21,6 +25,9 @@
 #include "4C_io_pstream.hpp"
 #include "4C_io_visualization_parameters.hpp"
 #include "4C_linalg_krylov_projector.hpp"
+#include "4C_linalg_map.hpp"
+#include "4C_linalg_utils_sparse_algebra_create.hpp"
+#include "4C_linalg_vector.hpp"
 #include "4C_linear_solver_method_linalg.hpp"
 #include "4C_linear_solver_method_parameters.hpp"
 #include "4C_mat_elchmat.hpp"
@@ -47,8 +54,11 @@
 #include "4C_utils_function.hpp"
 #include "4C_utils_parameter_list.hpp"
 
+#include <cstddef>
+#include <memory>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 FOUR_C_NAMESPACE_OPEN
 
@@ -86,6 +96,7 @@ ScaTra::ScaTraTimIntImpl::ScaTraTimIntImpl(std::shared_ptr<Core::FE::Discretizat
           problem_->materials()->first_id_by_type(Core::Materials::m_newman_multiscale) != -1),
       micro_scale_(probnum != 0),
       has_external_force_(params_->sublist("EXTERNAL FORCE").get<bool>("EXTERNAL_FORCE")),
+      has_simplified_growth_conditions_(false),
       calcflux_domain_(
           Teuchos::getIntegralValue<Inpar::ScaTra::FluxType>(*params, "CALCFLUX_DOMAIN")),
       calcflux_domain_lumped_(params->get<bool>("CALCFLUX_DOMAIN_LUMPED")),
@@ -301,6 +312,11 @@ void ScaTra::ScaTraTimIntImpl::init()
 
   ScaTraUtils::check_consistency_of_s2_i_conditions(discretization());
 
+  // initialize dofs for simplified growth modeling (S2IKinetics with
+  // Butler-Volmer as kinetic model), if specified so
+  // by the user
+  init_simplified_growth_dofset();
+
   // create strategy
   create_meshtying_strategy();
 
@@ -383,6 +399,12 @@ void ScaTra::ScaTraTimIntImpl::setup()
       else
         omega_.resize(num_dof_per_node(), 1.);
     }
+  }
+
+  if (nds_growth_ != -1)
+  {
+    simplgrowthn_ = Core::LinAlg::create_vector(*discret_->dof_row_map(nds_growth()));
+    simplgrowthnp_ = Core::LinAlg::create_vector(*discret_->dof_row_map(nds_growth()));
   }
 
   // temporal solution derivative at time n+1
@@ -1646,6 +1668,9 @@ void ScaTra::ScaTraTimIntImpl::update()
 {
   // update quantities associated with meshtying strategy
   strategy_->update();
+
+  // update simplified growth variables
+  simplgrowthn_->update(1.0, *simplgrowthnp_, 0.0);
 }
 
 /*----------------------------------------------------------------------*
@@ -1889,6 +1914,27 @@ void ScaTra::ScaTraTimIntImpl::collect_runtime_output_data()
 
     // loop over macro-scale elements
     discret_->evaluate(eleparams, nullptr, nullptr, nullptr, nullptr, nullptr);
+  }
+
+  // generate output for simplified growth conditions
+  if (has_simplified_growth_conditions_)
+  {
+    // convert vector to multi vector
+    auto simplified_growth =
+        Core::LinAlg::MultiVector<double>(*discret_->node_row_map(), nsd_, true);
+    for (int inode = 0; inode < discret_->num_my_row_nodes(); ++inode)
+    {
+      for (int dim = 0; dim < nsd_; ++dim)
+      {
+        (simplified_growth)(dim)[inode] = (*simplgrowthnp_)[inode * nsd_ + dim];
+      }
+    }
+
+    // output target state vector of discrete scatra-scatra interface
+    // layer thicknesses (simplified growth modeling)
+    std::vector<std::optional<std::string>> simplified_growth_context(nsd_, "simplified_growth");
+    visualization_writer().append_result_data_vector_with_context(
+        simplified_growth, Core::IO::OutputEntity::node, simplified_growth_context);
   }
 }
 
@@ -3976,5 +4022,39 @@ void ScaTra::ScaTraTimIntImpl::test_results()
   Global::Problem::instance()->add_field_test(create_scatra_field_test());
   Global::Problem::instance()->test_all(discret_->get_comm());
 }
+
+void ScaTra::ScaTraTimIntImpl::init_simplified_growth_dofset()
+{
+  // add dofset for scatra-scatra simplified growth modeling
+  // (Butler-Volmer)
+  std::vector<const Core::Conditions::Condition*> simplified_growth_conditions =
+      ScaTraUtils::get_s2i_kinetics_butler_volmer_simplified_growth_conditions(discretization());
+  if (simplified_growth_conditions.size())
+  {
+    // set flag for simplified growth conditions
+    has_simplified_growth_conditions_ = true;
+
+    const auto& col_map = *discretization()->node_col_map();
+    const std::shared_ptr<Core::LinAlg::Vector<int>> numdofpernode =
+        std::make_shared<Core::LinAlg::Vector<int>>(col_map);
+    const std::span<const int> my_col_nodes(
+        col_map.my_global_elements(), col_map.num_my_elements());
+    // add simplified growth degrees of freedom to all domain nodes
+    // (depending on the number of space dimensions)
+    for (const int& inode : my_col_nodes)
+    {
+      (*numdofpernode)[inode] = nsd_;
+    }
+
+    int number_dofsets = get_max_dof_set_number();
+    std::shared_ptr<Core::DOFSets::DofSetInterface> dofset =
+        std::make_shared<Core::DOFSets::DofSetPredefinedDoFNumber>(
+            numdofpernode, nullptr, nullptr, true);
+    if (discretization()->add_dof_set(dofset) != ++number_dofsets)
+      FOUR_C_THROW("Scalar transport discretization exhibits invalid number of dofsets!");
+    set_number_of_dof_set_growth(number_dofsets);
+  }
+}
+
 
 FOUR_C_NAMESPACE_CLOSE

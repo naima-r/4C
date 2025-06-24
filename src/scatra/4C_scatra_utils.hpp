@@ -10,6 +10,7 @@
 
 #include "4C_config.hpp"
 
+#include "4C_fem_condition.hpp"
 #include "4C_fem_general_element.hpp"
 #include "4C_linalg_fixedsizematrix.hpp"
 
@@ -24,6 +25,12 @@ namespace ScaTra::ScaTraUtils
 
   //! check, if nodes of input conditions equal s2i kinetics condition
   void check_consistency_with_s2_i_kinetics_condition(const std::string& condition_to_be_tested,
+      std::shared_ptr<Core::FE::Discretization> discretization);
+
+  //! determine the s2i kinetics butler volmer conditions modeling
+  //! simplified growth
+  std::vector<const Core::Conditions::Condition*>
+  get_s2i_kinetics_butler_volmer_simplified_growth_conditions(
       std::shared_ptr<Core::FE::Discretization> discretization);
 
   //! Calculate the reconstructed nodal gradient at a node by means of mean value averaging
