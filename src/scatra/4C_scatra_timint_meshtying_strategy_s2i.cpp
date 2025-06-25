@@ -3017,8 +3017,10 @@ void ScaTra::MeshtyingStrategyS2I::set_condition_specific_scatra_parameters(
   Teuchos::ParameterList conditionparams;
 
   // fill the parameter list
+  // NAIMA: extend by simplified growth conditions
   write_s2_i_kinetics_specific_scatra_parameters_to_parameter_list(s2icondition, conditionparams);
 
+  // NAIMA: extend by simplified growth conditions
   Discret::Elements::ScaTraEleParameterBoundary::instance("scatra")->set_parameters(
       conditionparams);
 }
