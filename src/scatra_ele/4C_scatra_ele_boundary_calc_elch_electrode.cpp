@@ -14,6 +14,7 @@
 #include "4C_scatra_ele_parameter_elch.hpp"
 #include "4C_scatra_ele_parameter_std.hpp"
 #include "4C_scatra_ele_parameter_timint.hpp"
+#include "4C_utils_exceptions.hpp"
 #include "4C_utils_singleton_owner.hpp"
 
 FOUR_C_NAMESPACE_OPEN
@@ -108,6 +109,8 @@ void Discret::Elements::ScaTraEleBoundaryCalcElchElectrode<distype,
   if (is_pseudo_contact)
     my::extract_node_values(eslavestress_vector, discretization, la, "mechanicalStressState",
         my::scatraparams_->nds_two_tensor_quantity());
+
+  // NAIMA: if we have simplified growth conditions: integrate ODE for d_Li
 
   // loop over integration points
   for (int gpid = 0; gpid < intpoints.ip().nquad; ++gpid)

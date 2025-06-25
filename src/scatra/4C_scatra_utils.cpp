@@ -7,6 +7,7 @@
 
 #include "4C_scatra_utils.hpp"
 
+#include "4C_fem_condition.hpp"
 #include "4C_fem_condition_utils.hpp"
 #include "4C_fem_discretization.hpp"
 #include "4C_fem_general_extract_values.hpp"
@@ -15,6 +16,9 @@
 #include "4C_inpar_s2i.hpp"
 #include "4C_linalg_serialdensevector.hpp"
 #include "4C_linalg_utils_sparse_algebra_manipulation.hpp"
+#include "4C_utils_exceptions.hpp"
+
+#include <vector>
 
 FOUR_C_NAMESPACE_OPEN
 
@@ -71,9 +75,11 @@ void ScaTra::ScaTraUtils::check_consistency_of_s2_i_conditions(
     std::shared_ptr<Core::FE::Discretization> discretization)
 {
   // check if the number of s2i condition definition is correct
-  std::vector<const Core::Conditions::Condition*> s2ikinetics_conditions, s2isclcoupling_condition,
-      s2imeshtying_conditions, s2inoevaluation_conditions;
+  std::vector<const Core::Conditions::Condition*> s2ikinetics_conditions,
+      s2ikinetics_growth_conditions, s2isclcoupling_condition, s2imeshtying_conditions,
+      s2inoevaluation_conditions;
   discretization->get_condition("S2IKinetics", s2ikinetics_conditions);
+  discretization->get_condition("S2IKineticsGrowth", s2ikinetics_growth_conditions);
   discretization->get_condition("S2ISCLCoupling", s2isclcoupling_condition);
   discretization->get_condition("S2IMeshtying", s2imeshtying_conditions);
   discretization->get_condition("S2INoEvaluation", s2inoevaluation_conditions);
@@ -109,6 +115,28 @@ void ScaTra::ScaTraUtils::check_consistency_of_s2_i_conditions(
 
   ScaTraUtils::check_consistency_with_s2_i_kinetics_condition("S2IMeshtying", discretization);
   ScaTraUtils::check_consistency_with_s2_i_kinetics_condition("S2INoEvaluation", discretization);
+
+  // get S2I Kinetics Butler-Volmer conditions with simplified growth modeling
+  const std::vector<const Core::Conditions::Condition*> simplified_growth_conditions =
+      get_s2i_kinetics_butler_volmer_simplified_growth_conditions(discretization);
+
+  // check consistency of the S2I Kinetics Butler-Volmer conditions with
+  // simplified growth modeling
+  // 1. Only one simplified growth condition currently allowed
+  if (simplified_growth_conditions.size() > 1)
+  {
+    FOUR_C_THROW("We currently only allow for a single Butler-Volmer simplified growth condition!");
+  }
+  // 2. Check presence of S2IKineticsGrowth conditions. Currently, we do
+  //    not allow the combination of simplified growth with fully
+  //    coupled growth as modeled by these.
+  if (simplified_growth_conditions.size() && s2ikinetics_growth_conditions.size())
+  {
+    FOUR_C_THROW(
+        "There are simplified S2I Kinetics growth conditions and fully coupled S2IKineticsGrowth "
+        "conditions. These cannot "
+        "be currently handled in combination!");
+  }
 }
 
 /*----------------------------------------------------------------------*/
@@ -522,6 +550,47 @@ Core::LinAlg::Matrix<dim, 1> ScaTra::ScaTraUtils::do_mean_value_averaging_of_ele
   }
   return node_gradphi_smoothed;
 }
+
+std::vector<const Core::Conditions::Condition*>
+ScaTra::ScaTraUtils::get_s2i_kinetics_butler_volmer_simplified_growth_conditions(
+    std::shared_ptr<Core::FE::Discretization> discretization)
+{
+  // get all S2I Kinetics conditions
+  std::vector<const Core::Conditions::Condition*> s2ikinetics_conditions,
+      s2ikinetics_growth_conditions, s2isclcoupling_condition, s2imeshtying_conditions,
+      s2inoevaluation_conditions;
+  discretization->get_condition("S2IKinetics", s2ikinetics_conditions);
+
+
+  // declare the number of simplified growth conditions: S2I Kinetics
+  // Butler-Volmer conditions modeling simplified growth without
+  // influence on the current density (function output)
+  std::vector<const Core::Conditions::Condition*> simplified_growth_conditions;
+
+  // loop through scatra-scatra kinetics conditions; for the
+  // Butler-Volmer models, we determine
+  // whether simplified kinetics-based growth
+  // should be modeled
+  for (auto& kinetics_condition : s2ikinetics_conditions)
+  {
+    if (kinetics_condition->parameters().get_if<Inpar::S2I::KineticModels>("KINETIC_MODEL") !=
+            nullptr &&
+        kinetics_condition->parameters().get<Inpar::S2I::KineticModels>("KINETIC_MODEL") ==
+            static_cast<int>(Inpar::S2I::kinetics_butlervolmer))
+    {
+      if (kinetics_condition->parameters().get<bool>("MODEL_SIMPLIFIED_GROWTH"))
+      {
+        // add the specific condition to the vector of simplified growth
+        // conditions
+        simplified_growth_conditions.push_back(kinetics_condition);
+      }
+    }
+  }
+
+
+  return simplified_growth_conditions;
+}
+
 
 // Templates for Mean value averaging -- For now only HEX-type elements allowed!
 template Core::LinAlg::Matrix<3, 1>

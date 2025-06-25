@@ -12,6 +12,7 @@
 #include "4C_coupling_adapter_converter.hpp"
 #include "4C_coupling_adapter_mortar.hpp"
 #include "4C_coupling_volmortar_shape.hpp"
+#include "4C_fem_condition.hpp"
 #include "4C_fem_condition_utils.hpp"
 #include "4C_fem_dofset_predefineddofnumber.hpp"
 #include "4C_fem_general_assemblestrategy.hpp"
@@ -19,6 +20,7 @@
 #include "4C_fem_geometry_position_array.hpp"
 #include "4C_fluid_utils.hpp"
 #include "4C_global_data.hpp"
+#include "4C_inpar_s2i.hpp"
 #include "4C_io.hpp"
 #include "4C_io_control.hpp"
 #include "4C_linalg_equilibrate.hpp"
@@ -39,6 +41,7 @@
 #include "4C_scatra_timint_implicit.hpp"
 #include "4C_scatra_timint_meshtying_strategy_s2i_elch.hpp"
 #include "4C_utils_enum.hpp"
+#include "4C_utils_exceptions.hpp"
 #include "4C_utils_parameter_list.hpp"
 
 FOUR_C_NAMESPACE_OPEN
@@ -3014,8 +3017,10 @@ void ScaTra::MeshtyingStrategyS2I::set_condition_specific_scatra_parameters(
   Teuchos::ParameterList conditionparams;
 
   // fill the parameter list
+  // NAIMA: extend by simplified growth conditions
   write_s2_i_kinetics_specific_scatra_parameters_to_parameter_list(s2icondition, conditionparams);
 
+  // NAIMA: extend by simplified growth conditions
   Discret::Elements::ScaTraEleParameterBoundary::instance("scatra")->set_parameters(
       conditionparams);
 }
