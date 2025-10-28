@@ -972,7 +972,19 @@ double Discret::Elements::ScaTraEleCalc<distype, probdim>::eval_shape_func_and_d
   const double det = eval_shape_func_and_derivs_in_parameter_space();
 
   if (det < 1E-16)
+  {
+    if (eid_ == 900)
+    {
+      std::cout << "Debug info for element 900:\n";
+      std::cout << "eid_:\n" << eid_ << "\n";
+      std::cout << "xij_:\n" << xij_ << "\n";
+      std::cout << "xjm_:\n" << xjm_ << "\n";
+      std::cout << "deriv_:\n" << deriv_ << "\n";
+      std::cout << "iquad:\n" << iquad << "\n";
+      std::cout << "det:\n" << det << "\n";
+    }
     FOUR_C_THROW("GLOBAL ELEMENT NO. {} \nZERO OR NEGATIVE JACOBIAN DETERMINANT: {}", eid_, det);
+  }
 
   // compute global spatial derivatives
   derxy_.multiply(xij_, deriv_);

@@ -37,12 +37,16 @@
 #include "4C_scatra_ele_action.hpp"
 #include "4C_scatra_ele_boundary_calc.hpp"
 #include "4C_scatra_ele_parameter_boundary.hpp"
+#include "4C_scatra_ele_parameter_elch.hpp"
 #include "4C_scatra_ele_parameter_timint.hpp"
 #include "4C_scatra_timint_implicit.hpp"
 #include "4C_scatra_timint_meshtying_strategy_s2i_elch.hpp"
 #include "4C_utils_enum.hpp"
 #include "4C_utils_exceptions.hpp"
 #include "4C_utils_parameter_list.hpp"
+
+#include <iostream>
+#include <unordered_set>
 
 FOUR_C_NAMESPACE_OPEN
 
@@ -332,6 +336,182 @@ void ScaTra::MeshtyingStrategyS2I::evaluate_meshtying()
             scatratimint_->discretization()->evaluate_condition(condparams, islavematrix_,
                 imastermatrix_, islaveresidual_, nullptr, nullptr, "S2IKinetics",
                 kinetics_slave_cond.second->parameters().get<int>("ConditionID"));
+
+            // NAIMA: if we have simplified growth conditions: integrate ODE for d_Li
+            const bool has_simplified_growth_conditions =
+                kinetics_slave_cond.second->parameters().get<bool>("MODEL_SIMPLIFIED_GROWTH");
+
+            // const bool has_simplified_growth_conditions2 =
+            // Discret::Elements::ScaTraEleParameterBoundary::instance("scatra")->has_simplified_growth_conditions();
+            // //works as well -> which way better?
+
+            // FOUR_C_THROW("First {}, second {}", std::to_string(has_simplified_growth_conditions),
+            // std::to_string(has_simplified_growth_conditions2));
+
+            if (has_simplified_growth_conditions)
+            {
+              if (kinetics_slave_cond.second->parameters().get<Inpar::S2I::KineticModels>(
+                      "KINETIC_MODEL") !=
+                  static_cast<int>(Inpar::S2I::kinetics_butlervolmerreduced))
+                FOUR_C_THROW(
+                    "Wrong kinetic model. Only the reduced Butler-Volmer as KINETIC_MODEL is "
+                    "valid.");
+              // get parameters
+              const double dt = scatratimint_->dt();
+              const double kr = kinetics_slave_cond.second->parameters().get<double>("K_R");
+              const double alphaa = kinetics_slave_cond.second->parameters().get<double>("ALPHA_A");
+              const double alphac = kinetics_slave_cond.second->parameters().get<double>("ALPHA_C");
+              const double frt = dynamic_cast<ScaTra::ScaTraTimIntElch*>(scatratimint_)->frt();
+              const double R =
+                  Discret::Elements::ScaTraEleParameterElch::instance("scatra")->gas_constant();
+              const double faraday =
+                  Discret::Elements::ScaTraEleParameterElch::instance("scatra")->faraday();
+              const double mmass =
+                  kinetics_slave_cond.second->parameters().get<double>("MOLAR_MASS");
+              const double rho = kinetics_slave_cond.second->parameters().get<double>("DENSITY");
+              // DEBUG
+              std::cout << std::setprecision(9) << "dt = " << dt << ", kr = " << kr
+                        << ", alphaa = " << alphaa << ", alphac = " << alphac << ", frt = " << frt
+                        << ", R = " << R << ", faraday = " << faraday << ", mmass = " << mmass
+                        << ", rho = " << rho << std::endl;
+
+              // get simplified growth vectors
+              auto growthn = scatratimint_->get_simplgrowthn();
+              auto growthnp = scatratimint_->get_simplgrowthnp();
+
+              // DEBUG: print DOF maps
+              auto disc_scatra = scatratimint_->discretization();
+              const int nsets = disc_scatra->num_dof_sets();
+
+              for (int k = 0; k < nsets; ++k)
+              {
+                const auto& map_k = *disc_scatra->dof_row_map(k);
+                const int nloc = (int)map_k.num_my_elements();
+                std::cout << "[Test scatratimint] SET " << k << "  nloc=" << nloc << '\n';
+
+                const int nprint = std::min(nloc, 10);  // nur die ersten paar
+                for (int lid = 0; lid < nprint; ++lid)
+                {
+                  const auto gid = map_k.gid(lid);
+                  std::cout << "[scatratimint]  lid=" << lid << " -> gid=" << gid << '\n';
+                }
+              }
+
+              const Core::LinAlg::Vector<double>& g_growth = scatratimint_->get_simplgrowthnp();
+              int k_growth = -1;
+              for (int k = 0; k < nsets; ++k)
+              {
+                if (g_growth.get_map().same_as(*scatratimint_->discretization()->dof_row_map(k)))
+                {
+                  k_growth = k;
+                  break;
+                }
+              }
+
+              std::cout << "[DBG] k_growth detected as " << k_growth << '\n';
+              FOUR_C_ASSERT(k_growth >= 0, "Could not detect scatratimint displacement DOF set");
+
+              // define coeff
+              const double coeff = -mmass / (rho * faraday);
+
+              // Get condname for computing normal vectors
+              std::vector<std::string> condnames = {"S2IKinetics"};
+              auto nvector = dynamic_cast<ScaTra::ScaTraTimIntElch*>(scatratimint_)
+                                 ->get_normal_vectors(condnames);
+
+              if (condnames.empty())
+                FOUR_C_THROW("Could not determine condition name for normal vector computation.");
+
+              // extract nodal cloud from current condition
+              const std::vector<int>* nodegids = kinetics_slave_cond.second->get_nodes();
+
+              // loop over all nodes
+              for (int nodegid : *nodegids)
+              {
+                if (scatratimint_->discretization()->have_global_node(nodegid))
+                {
+                  const Core::Nodes::Node* const node =
+                      scatratimint_->discretization()->g_node(nodegid);
+
+                  // get dimension
+                  const int nsd = node->n_dim();
+
+                  if (!node) FOUR_C_THROW("Couldn't retrieve node with gid = {}", nodegid);
+
+                  if (node->owner() ==
+                      Core::Communication::my_mpi_rank(scatratimint_->discretization()->get_comm()))
+                  {
+                    const int doflid_scatra = scatratimint_->discretization()->dof_row_map()->lid(
+                        scatratimint_->discretization()->dof(0, node, 0));
+                    if (doflid_scatra < 0)
+                      FOUR_C_THROW(
+                          "Couldn't extract local ID of scalar transport degree of freedom!");
+
+                    const int doflid_growth = scatratimint_->discretization()->dof_row_map(2)->lid(
+                        scatratimint_->discretization()->dof(2, node, 0));
+                    std::cout << "[DBG] node gid=" << nodegid
+                              << " has doflid_growth=" << doflid_growth
+                              << ", GID= " << scatratimint_->discretization()->dof(2, node, 0)
+                              << ", set map size= "
+                              << scatratimint_->discretization()->dof_row_map(2)->num_my_elements()
+                              << ", set 2 DOF GID= "
+                              << scatratimint_->discretization()->dof_row_map(2)->gid(doflid_growth)
+                              << '\n';
+                    if (doflid_growth < 0)
+                      FOUR_C_THROW(
+                          "Couldn't extract local ID of scatra-scatra interface layer thickness!");
+
+                    // Extract electric potential and concentration
+                    const double slavepot = (*scatratimint_->phiafnp())[doflid_scatra + 1];
+                    // const double masterphi = (*imasterphi_on_slave_side_np_)[doflid_scatra];
+                    const double masterpot = (*imasterphi_on_slave_side_np_)[doflid_scatra + 1];
+
+                    // Compute current density
+                    const double i0 = kr * faraday;
+                    const double eta = slavepot - masterpot;
+                    const double iBV =
+                        i0 * (std::exp(alphaa * frt * eta) - std::exp(-alphac * frt * eta));
+
+                    // Compute scalar growth step
+                    const double delta_growth = coeff * iBV * dt;
+
+                    // Project scalar growth onto dimensions' directions
+                    int node_index = node->lid();
+                    for (int dim = 0; dim < nsd; ++dim)
+                    {
+                      // get normal vector component for this node
+                      const auto& normal_comp = (*nvector)(dim);
+                      const double ncomp = normal_comp[node_index];
+                      growthnp[doflid_growth + dim] =
+                          growthn[doflid_growth + dim] + delta_growth * ncomp;
+                    }
+
+                    // DEBUG
+                    std::cout << std::setprecision(6) << "normal = (" << (*nvector)(0)[node_index]
+                              << ", " << (*nvector)(1)[node_index] << ", "
+                              << (*nvector)(2)[node_index] << "" << std::endl;
+
+                    std::cout << std::setprecision(6) << "growthn = (" << growthn[doflid_growth + 0]
+                              << ", " << growthn[doflid_growth + 1] << ", "
+                              << growthn[doflid_growth + 2] << ")" << std::endl;
+
+                    std::cout << std::setprecision(6) << "growthnp = ("
+                              << growthnp[doflid_growth + 0] << ", " << growthnp[doflid_growth + 1]
+                              << ", " << growthnp[doflid_growth + 2] << ")" << std::endl;
+
+                    std::cout << std::setprecision(6) << "slavepot = " << slavepot
+                              << ", masterpot = " << masterpot << std::endl;
+
+                    std::cout << std::setprecision(6) << "iBV = " << iBV
+                              << ", delta_growth = " << delta_growth << std::endl;
+                  }
+                }
+              }
+
+              // Set updated growth vectors
+              scatratimint_->set_simplgrowthn(growthn);
+              scatratimint_->set_simplgrowthnp(growthnp);
+            }
           }
           else
           {
@@ -3104,6 +3284,8 @@ void ScaTra::MeshtyingStrategyS2I::write_s2_i_kinetics_specific_scatra_parameter
               "ALPHA_C", s2ikinetics_cond.parameters().get<double>("ALPHA_C"));
           s2icouplingparameters.set<bool>(
               "IS_PSEUDO_CONTACT", s2ikinetics_cond.parameters().get<bool>("IS_PSEUDO_CONTACT"));
+          s2icouplingparameters.set<bool>("MODEL_SIMPLIFIED_GROWTH",
+              s2ikinetics_cond.parameters().get<bool>("MODEL_SIMPLIFIED_GROWTH"));
 
           if (kineticmodel == Inpar::S2I::kinetics_butlervolmerreducedcapacitance)
             s2icouplingparameters.set<double>(

@@ -189,27 +189,37 @@ void Inpar::S2I::set_valid_conditions(std::vector<Core::Conditions::ConditionDef
       }
 
       {
-        auto butler_volmer = all_of(
-            {deprecated_selection<Inpar::S2I::KineticModels>("KINETIC_MODEL",
-                 {
-                     {"Butler-Volmer", Inpar::S2I::kinetics_butlervolmer},
-                     {"Butler-Volmer_Linearized", Inpar::S2I::kinetics_butlervolmerlinearized},
-                     {"Butler-VolmerReduced", Inpar::S2I::kinetics_butlervolmerreduced},
-                     {"Butler-VolmerReduced_Linearized",
-                         Inpar::S2I::kinetics_butlervolmerreducedlinearized},
-                 }),
-                parameter<int>("NUMSCAL"),
-                parameter<std::vector<int>>(
-                    "STOICHIOMETRIES", {.size = from_parameter<int>("NUMSCAL")}),
-                parameter<int>("E-"), parameter<double>("K_R"), parameter<double>("ALPHA_A"),
-                parameter<double>("ALPHA_C"), parameter<bool>("IS_PSEUDO_CONTACT"),
-                parameter<bool>("MODEL_SIMPLIFIED_GROWTH",
-                    {.description =
-                            "Model simplified local growth based on the current density at the "
-                            "interface; the "
-                            "Butler-Volmer current density remains unaffected by this simplified "
-                            "local growth!",
-                        .default_value = false})});
+        auto butler_volmer = all_of({
+            deprecated_selection<Inpar::S2I::KineticModels>("KINETIC_MODEL",
+                {
+                    {"Butler-Volmer", Inpar::S2I::kinetics_butlervolmer},
+                    {"Butler-Volmer_Linearized", Inpar::S2I::kinetics_butlervolmerlinearized},
+                    {"Butler-VolmerReduced", Inpar::S2I::kinetics_butlervolmerreduced},
+                    {"Butler-VolmerReduced_Linearized",
+                        Inpar::S2I::kinetics_butlervolmerreducedlinearized},
+                }),
+            parameter<int>("NUMSCAL"),
+            parameter<std::vector<int>>(
+                "STOICHIOMETRIES", {.size = from_parameter<int>("NUMSCAL")}),
+            parameter<int>("E-"),
+            parameter<double>("K_R"),
+            parameter<double>("ALPHA_A"),
+            parameter<double>("ALPHA_C"),
+            parameter<bool>("IS_PSEUDO_CONTACT"),
+            parameter<bool>("MODEL_SIMPLIFIED_GROWTH",
+                {.description =
+                        "Model simplified local growth based on the current density at the "
+                        "interface; the "
+                        "Butler-Volmer current density remains unaffected by this simplified "
+                        "local growth!",
+                    .default_value = false}),
+            parameter<double>(
+                "MOLAR_MASS", {.description = "Molar mass of the material. Default is for Lithium",
+                                  .default_value = 6.941e-09}),
+            parameter<double>(
+                "DENSITY", {.description = "Density of the material. Default is for Lithium",
+                               .default_value = 0.534e-07}),
+        });
         kinetic_model_choices.emplace_back(std::move(butler_volmer));
       }
 

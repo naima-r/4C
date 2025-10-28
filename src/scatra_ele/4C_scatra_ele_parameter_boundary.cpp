@@ -41,6 +41,7 @@ Discret::Elements::ScaTraEleParameterBoundary::ScaTraEleParameterBoundary(
       density_(-1.0),
       molar_heat_capacity_(-1.0),
       is_pseudo_contact_(false),
+      has_simplified_growth_conditions_(false),  // Naima added
       itemaxmimplicit_bv_(-1),
       kineticmodel_(-1),
       kr_(-1.0),
@@ -83,6 +84,7 @@ void Discret::Elements::ScaTraEleParameterBoundary::set_parameters(
           set_is_pseudo_contact(parameters);
           set_num_scal(parameters);
           set_permeabilities(parameters);
+          set_has_simplified_growth_conditions(parameters);  // Naima added
           break;
         }
 
@@ -92,6 +94,7 @@ void Discret::Elements::ScaTraEleParameterBoundary::set_parameters(
           set_resistance(parameters);
           set_num_electrons(parameters);
           set_on_off(parameters);
+          set_has_simplified_growth_conditions(parameters);  // Naima added
           break;
         }
 
@@ -117,6 +120,7 @@ void Discret::Elements::ScaTraEleParameterBoundary::set_parameters(
           set_num_electrons(parameters);
           set_num_scal(parameters);
           set_stoichiometries(parameters);
+          set_has_simplified_growth_conditions(parameters);  // Naima added
           if (kineticmodel_ == Inpar::S2I::kinetics_butlervolmerreducedcapacitance)
           {
             set_capacitance(parameters);
@@ -164,6 +168,7 @@ void Discret::Elements::ScaTraEleParameterBoundary::set_parameters(
           set_regularization(parameters);
           set_resistivity(parameters);
           set_stoichiometries(parameters);
+          // set_has_simplified_growth_conditions(parameters); // Naima added -> wrong here
           break;
         }
 
@@ -235,6 +240,14 @@ void Discret::Elements::ScaTraEleParameterBoundary::set_energy_substance_ratio(
   molar_heat_capacity_ =
       parameters.get<double>("MOLAR_HEAT_CAPACITY", std::numeric_limits<double>::infinity());
   if (molar_heat_capacity_ < 0.0) FOUR_C_THROW("Ratio of energy- and mass-flux must be positive!");
+}
+
+/*----------------------------------------------------------------------*
+ *----------------------------------------------------------------------*/
+void Discret::Elements::ScaTraEleParameterBoundary::set_has_simplified_growth_conditions(
+    Teuchos::ParameterList& parameters)
+{
+  has_simplified_growth_conditions_ = parameters.get<bool>("MODEL_SIMPLIFIED_GROWTH", false);
 }
 
 /*----------------------------------------------------------------------*

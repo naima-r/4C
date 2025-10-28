@@ -110,8 +110,6 @@ void Discret::Elements::ScaTraEleBoundaryCalcElchElectrode<distype,
     my::extract_node_values(eslavestress_vector, discretization, la, "mechanicalStressState",
         my::scatraparams_->nds_two_tensor_quantity());
 
-  // NAIMA: if we have simplified growth conditions: integrate ODE for d_Li
-
   // loop over integration points
   for (int gpid = 0; gpid < intpoints.ip().nquad; ++gpid)
   {

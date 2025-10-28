@@ -573,16 +573,26 @@ ScaTra::ScaTraUtils::get_s2i_kinetics_butler_volmer_simplified_growth_conditions
   // should be modeled
   for (auto& kinetics_condition : s2ikinetics_conditions)
   {
-    if (kinetics_condition->parameters().get_if<Inpar::S2I::KineticModels>("KINETIC_MODEL") !=
-            nullptr &&
-        kinetics_condition->parameters().get<Inpar::S2I::KineticModels>("KINETIC_MODEL") ==
-            static_cast<int>(Inpar::S2I::kinetics_butlervolmer))
+    auto side = kinetics_condition->parameters().get<Inpar::S2I::InterfaceSides>("INTERFACE_SIDE");
+    if (side == Inpar::S2I::side_slave)
     {
       if (kinetics_condition->parameters().get<bool>("MODEL_SIMPLIFIED_GROWTH"))
       {
-        // add the specific condition to the vector of simplified growth
-        // conditions
-        simplified_growth_conditions.push_back(kinetics_condition);
+        if (kinetics_condition->parameters().get_if<Inpar::S2I::KineticModels>("KINETIC_MODEL") !=
+                nullptr &&
+            kinetics_condition->parameters().get<Inpar::S2I::KineticModels>("KINETIC_MODEL") ==
+                static_cast<int>(Inpar::S2I::kinetics_butlervolmerreduced))
+        {
+          // add the specific condition to the vector of simplified growth
+          // conditions
+          simplified_growth_conditions.push_back(kinetics_condition);
+        }
+        else
+        {
+          FOUR_C_THROW(
+              "Simplified growth modeling can currently only be used in combination with the "
+              "'Butler-VolmerReduced' kinetic model!");
+        }
       }
     }
   }

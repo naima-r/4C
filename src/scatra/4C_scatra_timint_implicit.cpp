@@ -4046,11 +4046,16 @@ void ScaTra::ScaTraTimIntImpl::init_simplified_growth_dofset()
       (*numdofpernode)[inode] = nsd_;
     }
 
-    int number_dofsets = get_max_dof_set_number();
+    int number_dofsets = std::max(0, get_max_dof_set_number());
+
     std::shared_ptr<Core::DOFSets::DofSetInterface> dofset =
         std::make_shared<Core::DOFSets::DofSetPredefinedDoFNumber>(
             numdofpernode, nullptr, nullptr, true);
-    if (discretization()->add_dof_set(dofset) != ++number_dofsets)
+
+    auto temp_int = discretization()->add_dof_set(dofset);
+    std::cout << "temp_int= " << temp_int << std::endl;
+    std::cout << "number_dofsets= " << number_dofsets << std::endl;
+    if (temp_int != ++number_dofsets)
       FOUR_C_THROW("Scalar transport discretization exhibits invalid number of dofsets!");
     set_number_of_dof_set_growth(number_dofsets);
   }

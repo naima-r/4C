@@ -27,7 +27,7 @@ void SSI::SSICouplingMatchingVolume::init(const int ndim,
 {
   set_is_setup(false);
 
-  int scatra_dofset_counter = 0;
+  int scatra_dofset_counter = std::max(0, ssi_base->scatra_field()->get_max_dof_set_number());
   int structure_dofset_counter = 0;
 
   auto scatra_integrator = ssi_base->scatra_field();
@@ -81,6 +81,7 @@ void SSI::SSICouplingMatchingVolume::init(const int ndim,
       FOUR_C_THROW("unexpected dof sets in scatra field");
     scatra_integrator->set_number_of_dof_set_two_tensor_quantity(scatra_dofset_counter);
   }
+
 
   assign_material_pointers(structdis, scatradis);
 

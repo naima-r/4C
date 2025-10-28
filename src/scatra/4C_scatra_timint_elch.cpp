@@ -610,7 +610,12 @@ void ScaTra::ScaTraTimIntElch::prepare_time_loop()
   if (step_ == 0)
   {
     // calculate initial electric potential field
-    if (elchparams_->get<bool>("INITPOTCALC")) calc_initial_potential_field();
+    if (elchparams_->get<bool>("INITPOTCALC"))
+    {
+      calc_initial_potential_field();
+      simplgrowthn_->put_scalar(0.0);
+      simplgrowthnp_->put_scalar(0.0);
+    }
 
     // evaluate SOC, c-rate and cell voltage for output
     evaluate_electrode_info_interior();

@@ -16,12 +16,17 @@
 #include "4C_linalg_sparseoperator.hpp"
 #include "4C_linalg_utils_sparse_algebra_create.hpp"
 #include "4C_linalg_utils_sparse_algebra_manipulation.hpp"
+#include "4C_linalg_vector.hpp"
 #include "4C_scatra_ele_action.hpp"
 #include "4C_scatra_timint_implicit.hpp"
 #include "4C_scatra_timint_meshtying_strategy_s2i.hpp"
 #include "4C_ssi_utils.hpp"
 #include "4C_structure_new_enum_lists.hpp"
 #include "4C_utils_parameter_list.hpp"
+
+#include <Epetra_CrsMatrix.h>
+
+#include <memory>
 
 FOUR_C_NAMESPACE_OPEN
 
@@ -80,7 +85,8 @@ void SSI::ScatraStructureOffDiagCoupling::evaluate_off_diag_block_scatra_structu
   Core::FE::AssembleStrategy strategyscatrastructure(
       0,  // row assembly based on number of dofset associated with scalar transport dofs on
           // scalar transport discretization
-      1,  // column assembly based on number of dofset associated with structural dofs on scalar
+      scatra_->nds_disp(),  // column assembly based on number of dofset associated
+                            // with structural dofs on scalar
       // transport discretization
       scatrastructureblock,  // scatra-structure matrix block
       nullptr,               // no additional matrices or vectors
@@ -118,7 +124,8 @@ void SSI::ScatraManifoldStructureOffDiagCoupling::
   Core::FE::AssembleStrategy strategyscatrastructure(
       0,  // row assembly based on number of dofset associated with scalar transport dofs on
           // scalar transport discretization
-      1,  // column assembly based on number of dofset associated with structural dofs on scalar
+      scatra_manifold_->nds_disp(),  // column assembly based on number of dofset associated with
+                                     // structural dofs on scalar
       // transport discretization
       scatramanifoldstructureblock,  // scatra-structure matrix block
       nullptr,                       // no additional matrices or vectors
@@ -379,7 +386,8 @@ void SSI::ScatraStructureOffDiagCoupling::
   Core::FE::AssembleStrategy strategyscatras2istructure(
       0,  // row assembly based on number of dofset associated with scalar transport dofs on
           // scalar transport discretization
-      1,  // column assembly based on number of dofset associated with structural dofs on
+      scatra_->nds_disp(),  // column assembly based on number of dofset associated with
+                            // structural dofs on
       // structural discretization
       scatra_slave_flux_structure_slave_dofs_on_scatra_slave_matrix,
       scatra_master_flux_on_scatra_slave_structure_slave_dofs_on_scatra_slave_matrix,
@@ -611,14 +619,15 @@ void SSI::ScatraStructureOffDiagCoupling::
             *block_map_structure_, meshtying_strategy_s2i_->block_maps_slave(), 81, false, true);
   }
 
+
   // create strategy for assembly of auxiliary system matrix
   Core::FE::AssembleStrategy strategyscatrastructures2i(
       0,  // row assembly based on number of dofset associated with scalar transport dofs on
           // scalar transport discretization
-      1,  // column assembly based on number of dofset associated with structural dofs on
-          // structural discretization
-      evaluate_matrix,  // auxiliary system matrix
-      nullptr,          // no additional matrices of vectors
+      scatra_->nds_disp(),  // column assembly based on number of dofset associated with structural
+                            // dofs on structural discretization
+      evaluate_matrix,      // auxiliary system matrix
+      nullptr,              // no additional matrices of vectors
       nullptr, nullptr, nullptr);
 
   // evaluate scatra-scatra interface coupling

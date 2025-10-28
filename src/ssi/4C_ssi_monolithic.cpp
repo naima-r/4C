@@ -34,8 +34,11 @@
 #include "4C_ssi_monolithic_evaluate_OffDiag.hpp"
 #include "4C_ssi_monolithic_meshtying_strategy.hpp"
 #include "4C_ssi_utils.hpp"
+#include "4C_utils_exceptions.hpp"
 
 #include <Teuchos_TimeMonitor.hpp>
+
+#include <iostream>
 
 FOUR_C_NAMESPACE_OPEN
 
@@ -1157,9 +1160,1238 @@ void SSI::SsiMono::distribute_solution_all_fields(const bool restore_velocity)
     structure_field()->set_state(structure_field()->write_access_dispnp());
   }
 
+  /*
+  // ------------------------------- Check MAppings between structure and scatra DOF layouts
+  -------------------------------
+  // const auto& u_struct = *structure_field()->dispnp();
+  // const auto& g = scatra_field()->get_simplgrowthnp();
+  const Core::LinAlg::Vector<double>& u_struct = *structure_field()->dispnp();
+  const Core::LinAlg::Vector<double>& g = scatra_field()->get_simplgrowthnp();
+
+  // test lengths
+  const long long n_struct = static_cast<long long>(u_struct.global_length());
+  const long long n_scatra = static_cast<long long>(g.global_length());
+  // auto n_struct = u_struct.global_length();
+  std::cout << "Structure DOFs: " << n_struct << std::endl;
+  // auto n_scatra = g.global_length();
+  std::cout << "ScaTra DOFs: " << n_scatra << std::endl;
+
+  if (n_scatra != n_struct)
+  {
+    std::ostringstream oss;
+    oss << "[SSI] Growth/Structure size mismatch: growth=" << n_scatra << " vs struct=" << n_struct
+        << " -> Mapping necessary (no 1:1-DOF layout).";
+    FOUR_C_THROW("Mapping necessary. Lengths do not match.");
+  }
+
+  // tst layout
+  const auto& map_struct = u_struct.get_map();  // ggf. Map()/getMap()
+  const auto& map_scatra = g.get_map();
+
+  // Show first 5 pairs (LID -> GID)
+  std::cout << "[Check] STRUCT LID->GID:";
+  long long nloc_u = map_struct.num_my_elements();
+  for (int i = 0; i < std::min<long long>(5, nloc_u); ++i)
+  {
+    long long gid = map_struct.gid(i);
+    // Falls es lid(gid) gibt, sollte es wieder i ergeben:
+    // int i_back = map_struct.lid(gid); // wenn vorhanden
+    std::cout << " (" << i << "->" << gid << ")";
+  }
+  std::cout << std::endl;
+
+  std::cout << "[Check] SCATRA LID->GID:";
+  long long nloc_g = map_scatra.num_my_elements();
+  for (int i = 0; i < std::min<long long>(5, nloc_g); ++i)
+  {
+    long long gid = map_scatra.gid(i);
+    // int i_back = map_scatra.lid(gid); // wenn vorhanden
+    std::cout << " (" << i << "->" << gid << ")";
+  }
+  std::cout << std::endl;
+
+  const bool layout_match = map_struct.same_as(map_scatra);  // ggf. SameAs()/isSameAs()
+  if (!layout_match)
+  {
+    std::cout
+        << "[SSI] Growth/Structure LAYOUT MISMATCH -> Mapping necessary. Starting diagnostics..."
+        << std::endl;
+
+    // local elements
+    const long long nloc_u = static_cast<long long>(map_struct.num_my_elements());
+    const long long nloc_g = static_cast<long long>(map_scatra.num_my_elements());
+    std::cout << "[SSI][Diag] local elements: struct=" << nloc_u << "  scatra=" << nloc_g
+              << std::endl;
+
+    // local gids
+    std::vector<long long> gids_u;
+    gids_u.reserve(static_cast<size_t>(nloc_u));
+    for (long long i = 0; i < nloc_u; i++)
+    {
+      long long gid = static_cast<long long>(map_struct.gid(static_cast<int>(i)));
+      gids_u.push_back(gid);
+    }
+    std::vector<long long> gids_g;
+    gids_g.reserve(static_cast<size_t>(nloc_g));
+    for (long long i = 0; i < nloc_g; i++)
+    {
+      long long gid = static_cast<long long>(map_scatra.gid(static_cast<int>(i)));
+      gids_g.push_back(gid);
+    }
+
+    // first 12 gids
+    std::cout << "[SSI][Diag] struct GIDs head:";
+    size_t lim_u = gids_u.size() < 12 ? gids_u.size() : 12;
+    for (size_t i = 0; i < lim_u; i++) std::cout << " " << gids_u[i];
+    if (gids_u.size() > 12) std::cout << " ...";
+    std::cout << std::endl;
+
+    std::cout << "[SSI][Diag] scatra GIDs head:";
+    size_t lim_g = gids_g.size() < 12 ? gids_g.size() : 12;
+    for (size_t i = 0; i < lim_g; i++) std::cout << " " << gids_g[i];
+    if (gids_g.size() > 12) std::cout << " ...";
+    std::cout << std::endl;
+
+    // duplicates
+    bool dup_u = false;
+    {
+      std::set<long long> seen;
+      for (size_t i = 0; i < gids_u.size(); i++)
+      {
+        if (!seen.insert(gids_u[i]).second)
+        {
+          dup_u = true;
+          break;
+        }
+      }
+    }
+    bool dup_g = false;
+    {
+      std::set<long long> seen;
+      for (size_t i = 0; i < gids_g.size(); i++)
+      {
+        if (!seen.insert(gids_g[i]).second)
+        {
+          dup_g = true;
+          break;
+        }
+      }
+    }
+    if (dup_u || dup_g)
+    {
+      std::cout << "[SSI][Diag] WARNING: duplicate local GIDs detected (ghost/overlap suspected): "
+                << "struct=" << (dup_u ? "true" : "false")
+                << " scatra=" << (dup_g ? "true" : "false") << std::endl;
+    }
+
+    // local GID set differences
+    std::vector<long long> a = gids_u;
+    std::sort(a.begin(), a.end());
+    std::vector<long long> b = gids_g;
+    std::sort(b.begin(), b.end());
+    std::vector<long long> only_u_vec;
+    std::vector<long long> only_g_vec;
+    std::set_difference(a.begin(), a.end(), b.begin(), b.end(), std::back_inserter(only_u_vec));
+    std::set_difference(b.begin(), b.end(), a.begin(), a.end(), std::back_inserter(only_g_vec));
+
+    if (!only_u_vec.empty() || !only_g_vec.empty())
+    {
+      std::cout << "[SSI][Diag] local GID set differs: struct_only=" << only_u_vec.size()
+                << " scatra_only=" << only_g_vec.size() << std::endl;
+
+      // example output of differing gids (up to 10)
+      size_t p = only_u_vec.size() < 10 ? only_u_vec.size() : 10;
+      if (p > 0)
+      {
+        std::cout << "[SSI][Diag] struct_only (first up to 10):";
+        // for (size_t i = 0; i < p; i++) std::cout << " " << only_u_vec[i];
+        if (only_u_vec.size() > 10) std::cout << " ...";
+        std::cout << std::endl;
+      }
+      p = only_g_vec.size() < 10 ? only_g_vec.size() : 10;
+      if (p > 0)
+      {
+        std::cout << "[SSI][Diag] scatra_only (first up to 10):";
+        for (size_t i = 0; i < p; i++) std::cout << " " << only_g_vec[i];
+        if (only_g_vec.size() > 10) std::cout << " ...";
+        std::cout << std::endl;
+      }
+    }
+    else
+    {
+      // same GID set - check order
+      bool same_order = (gids_u.size() == gids_g.size());
+      if (same_order)
+      {
+        for (size_t i = 0; i < gids_u.size(); i++)
+        {
+          if (gids_u[i] != gids_g[i])
+          {
+            same_order = false;
+            break;
+          }
+        }
+      }
+      std::cout << "[SSI][Diag] same local GID order: " << (same_order ? "true" : "false")
+                << std::endl;
+    }
+
+    // gid ranges
+    if (!gids_u.empty())
+    {
+      long long u_min = gids_u[0], u_max = gids_u[0];
+      for (size_t i = 1; i < gids_u.size(); i++)
+      {
+        if (gids_u[i] < u_min) u_min = gids_u[i];
+        if (gids_u[i] > u_max) u_max = gids_u[i];
+      }
+      std::cout << "[SSI][Diag] struct local GID range: [" << u_min << ", " << u_max << "]"
+                << std::endl;
+    }
+    if (!gids_g.empty())
+    {
+      long long g_min = gids_g[0], g_max = gids_g[0];
+      for (size_t i = 1; i < gids_g.size(); i++)
+      {
+        if (gids_g[i] < g_min) g_min = gids_g[i];
+        if (gids_g[i] > g_max) g_max = gids_g[i];
+      }
+      std::cout << "[SSI][Diag] scatra local GID range: [" << g_min << ", " << g_max << "]"
+                << std::endl;
+    }
+
+    FOUR_C_THROW(
+        "[SSI] Growth/Structure layout mismatch -> Mapping necessary (no 1:1-DOF layout).");
+  }
+  else
+  {
+    std::cout << "[SSI] Growth/Structure layout match -> Direct assignment possible." << std::endl;
+  }
+  */
+
+  /*
+  // ------------------------------- Test DOF sets -------------------------------
+  const Core::LinAlg::Vector<double>& u_struct = *structure_field()->dispnp();
+  const auto& disp_map = u_struct.get_map();
+
+  const Core::LinAlg::Vector<double>& g = scatra_field()->get_simplgrowthnp();
+
+  // test lengths
+  const long long n_u_struct = static_cast<long long>(u_struct.global_length());
+  const long long n_g_scatra = static_cast<long long>(g.global_length());
+  // auto n_struct = u_struct.global_length();
+  std::cout << "Structure DOFs from *structure_field()->dispnp(): " << n_u_struct << std::endl;
+  // auto n_scatra = g.global_length();
+  std::cout << "ScaTra DOFs from scatra_field()->get_simplgrowthnp(): " << n_g_scatra << std::endl;
+
+  const int nsets_struct = structure_field()->discretization()->num_dof_sets();
+  std::cout << "[SSI] STRUCT num DOF-sets = " << nsets_struct << std::endl;
+  const int nsets_scatra = scatra_field()->discretization()->num_dof_sets();
+  std::cout << "[SSI] SCATRA num DOF-sets = " << nsets_scatra << std::endl;
+
+
+  // show all DOF sets with local elements
+  for (int k = 0; k < nsets_scatra; ++k)
+  {
+    const auto& km = *scatra_field()->discretization()->dof_row_map(k);
+    const long long nloc = static_cast<long long>(km.num_my_elements());
+    std::cout << "[SSI] SCATRA DOF-set " << k << " local elements = " << nloc << std::endl;
+  }
+
+  for (int k = 0; k < nsets_struct; ++k)
+  {
+    const auto& km = *structure_field()->discretization()->dof_row_map(k);
+    const long long nloc = static_cast<long long>(km.num_my_elements());  // ggf. NumMyElements()
+    std::cout << "[SSI] STRUCT DOF-set " << k << " local elements = " << nloc << std::endl;
+  }
+
+  // detect which STRUCT DOF-set corresponds to displacement
+  int k_struct_disp = -1;
+  for (int k = 0; k < nsets_struct; ++k)
+  {
+    const auto& map_k = *structure_field()->discretization()->dof_row_map(k);
+    if (disp_map.same_as(map_k))
+    {
+      k_struct_disp = k;
+      break;
+    }
+  }
+
+  if (k_struct_disp < 0)
+  {
+    std::cout << "[SSI] ERROR: Could not detect displacement DOF-set index from maps." << std::endl;
+    FOUR_C_THROW("Cannot detect structure displacement DOF-set.");
+  }
+  else
+  {
+    std::cout << "[SSI] Detected STRUCT displacement DOF-set index = " << k_struct_disp
+              << std::endl;
+  }
+
+  // ----- Mapping Growth (ScaTra Growth, Set 2) -> Struktur-Layout
+  // (Struktur-Layout, Set 0) ----
+  const Core::LinAlg::Vector<double>& g_growth =
+      scatra_field()->get_simplgrowthnp();  // ideal: const&
+
+  Core::LinAlg::Vector<double> u_growth_struct_like = *structure_field()->dispnp();
+  u_growth_struct_like.put_scalar(0.0);
+
+  // DOF-Maps
+  const auto& map_struct_dof =
+      *structure_field()->discretization()->dof_row_map(0);  // STRUCT: displacement set = 0
+  const auto& map_growth_dof =
+      *scatra_field()->discretization()->dof_row_map(2);  // SCATRA: growth set = 2
+
+  // NODE-Maps
+  // const auto& map_struct_node = *structure_field()->discretization()->node_row_map();
+  const auto& map_scatra_node = *scatra_field()->discretization()->node_row_map();
+
+  // get dim from discretization
+  auto nsd_u =
+      structure_field()->discretization()->n_dim();  // scatra_field()->discretization()->num_dim()
+  const int nsd = static_cast<int>(nsd_u);
+
+  // iterate over all scatra nodes
+  const long long nloc_nodes_scatra = static_cast<long long>(map_scatra_node.num_my_elements());
+
+  long long copied = 0, missing = 0;
+
+  for (long long lid_node_scatra = 0; lid_node_scatra < nloc_nodes_scatra; ++lid_node_scatra)
+  {
+    // global node id
+    const long long node_gid = map_scatra_node.gid(static_cast<int>(lid_node_scatra));
+    std::cout << "[SSI][Map] Processing SCATRA node LID=" << lid_node_scatra << " GID=" << node_gid
+              << std::endl;
+
+    // same node must exist in both discretizations
+    if (!scatra_field()->discretization()->have_global_node(static_cast<int>(node_gid)))
+    {
+      ++missing;
+      std::cout << "[SSI][Map]  -> missing in SCATRA discretization." << std::endl;
+      continue;
+    }
+    if (!structure_field()->discretization()->have_global_node(static_cast<int>(node_gid)))
+    {
+      ++missing;
+      std::cout << "[SSI][Map]  -> missing in STRUCTURE discretization." << std::endl;
+      continue;
+    }
+
+    const Core::Nodes::Node* node_scatra =
+        scatra_field()->discretization()->g_node(static_cast<int>(node_gid));
+    std::cout << "[SSI][Map]  -> found in SCATRA discretization. node_scatra= " << node_scatra
+              << " GID=" << node_gid << std::endl;
+    const Core::Nodes::Node* node_struct =
+        structure_field()->discretization()->g_node(static_cast<int>(node_gid));
+    std::cout << "[SSI][Map]  -> found in STRUCTURE discretization. node_struct= " << node_struct
+              << " GID=" << node_gid << std::endl;
+    if (!node_scatra || !node_struct)
+    {
+      ++missing;
+      continue;
+    }
+
+    // basic LID for growth DOF set at this node
+    const int lid_growth_base = map_growth_dof.lid(
+        scatra_field()->discretization()->dof(2, node_scatra, 0));  // dof(set,node*,comp)
+    std::cout << "[SSI][Map]  -> growth LID base= " << lid_growth_base << std::endl;
+    if (lid_growth_base < 0)
+    {
+      // Dim-weise Struktur-DOFs dieses Knotens auf 0 setzen
+      for (int dim = 0; dim < nsd; ++dim)
+      {
+        int lid_struct =
+            map_struct_dof.lid(structure_field()->discretization()->dof(0, node_struct, dim));
+        if (lid_struct >= 0) u_growth_struct_like[(size_t)lid_struct] = 0.0;
+      }
+      ++missing;
+      continue;
+    }
+
+    int lid_struct_dim[3] = {-1, -1, -1};
+    // for each dim: get struct-lid and copy value
+    for (int dim = 0; dim < nsd; ++dim)
+    {
+      const int lid_struct =
+          map_struct_dof.lid(structure_field()->discretization()->dof(0, node_struct, dim));
+      std::cout << "[SSI][Map]    -> struct LID (dim " << dim << ")= " << lid_struct << std::endl;
+      if (lid_struct < 0)
+      {
+        ++missing;
+        continue;
+      }
+
+      const int lid_growth = lid_growth_base + dim;
+
+      // copy growth value to struct-like growth vector
+      u_growth_struct_like[static_cast<size_t>(lid_struct)] =
+          g_growth[static_cast<size_t>(lid_growth)];
+      ++copied;
+
+      lid_struct_dim[dim] = lid_struct;
+    }
+    // ---------- DEBUG: value comp for each node (sourcce->aim) ----------
+
+    if (lid_struct_dim[0] >= 0 && lid_struct_dim[1] >= 0 && lid_struct_dim[2] >= 0)
+    {
+      std::cout << "[SSI][Map] copy node GID=" << node_gid << " u_struct(dim0..2)="
+                << u_growth_struct_like[static_cast<size_t>(lid_struct_dim[0])] << ", "
+                << u_growth_struct_like[static_cast<size_t>(lid_struct_dim[1])] << ", "
+                << u_growth_struct_like[static_cast<size_t>(lid_struct_dim[2])] << "  "
+                << "from growth=" << g_growth[static_cast<size_t>(lid_growth_base + 0)] << ", "
+                << g_growth[static_cast<size_t>(lid_growth_base + 1)] << ", "
+                << g_growth[static_cast<size_t>(lid_growth_base + 2)] << std::endl;
+    }
+  }
+
+  std::cout << "[SSI][Map] copied=" << copied << "  missing=" << missing
+            << "  (local scatra nodes=" << nloc_nodes_scatra << ")\n";
+  */
+
+  /*
+  // ----------------------------------------------- hereeeeee mapping node-based implemented
+  // ------------------------------- Test DOF sets -------------------------------
+  const Core::LinAlg::Vector<double>& u_struct = *structure_field()->dispnp();
+  const auto& disp_map = u_struct.get_map();
+  const Core::LinAlg::Vector<double>& g = scatra_field()->get_simplgrowthnp();
+
+  // test lengths
+  const long long n_u_struct = static_cast<long long>(u_struct.global_length());
+  const long long n_g_scatra = static_cast<long long>(g.global_length());
+  // auto n_struct = u_struct.global_length();
+  std::cout << "Structure DOFs local elements from *structure_field()->dispnp(): " << n_u_struct
+            << std::endl;
+  // auto n_scatra = g.global_length();
+  std::cout << "ScaTra DOFs local elements from scatra_field()->get_simplgrowthnp(): " << n_g_scatra
+            << std::endl;
+
+  const int nsets_struct = structure_field()->discretization()->num_dof_sets();
+  std::cout << "[SSI] STRUCT num DOF-sets = " << nsets_struct << std::endl;
+  const int nsets_scatra = scatra_field()->discretization()->num_dof_sets();
+  std::cout << "[SSI] SCATRA num DOF-sets = " << nsets_scatra << std::endl;
+
+
+  // show all DOF sets with local elements
+  for (int k = 0; k < nsets_scatra; ++k)
+  {
+    const auto& km = *scatra_field()->discretization()->dof_row_map(k);
+    const long long nloc = static_cast<long long>(km.num_my_elements());
+    std::cout << "[SSI] SCATRA DOF-set " << k << " local elements = " << nloc << std::endl;
+  }
+
+  for (int k = 0; k < nsets_struct; ++k)
+  {
+    const auto& km = *structure_field()->discretization()->dof_row_map(k);
+    const long long nloc = static_cast<long long>(km.num_my_elements());
+    std::cout << "[SSI] STRUCT DOF-set " << k << " local elements = " << nloc << std::endl;
+  }
+
+  // Mapping Growth (ScaTra Growth) -> Struktur-Layout (Struktur displacement)
+  //  Read source vector once
+  const Core::LinAlg::Vector<double>& g_growth = scatra_field()->get_simplgrowthnp();
+
+  // Detect STRUCT displacement DOF set from the disp vector's map
+  int k_struct_disp = -1;
+  for (int k = 0; k < nsets_struct; ++k)
+  {
+    if (disp_map.same_as(*structure_field()->discretization()->dof_row_map(k)))
+    {
+      k_struct_disp = k;
+      break;
+    }
+  }
+  FOUR_C_ASSERT(k_struct_disp >= 0, "Could not detect STRUCT displacement DOF set");
+
+  // Detect SCATRA growth DOF set from g_growth's map
+  int k_growth = -1;
+  for (int k = 0; k < nsets_scatra; ++k)
+  {
+    if (g_growth.get_map().same_as(*scatra_field()->discretization()->dof_row_map(k)))
+    {
+      k_growth = k;
+      break;
+    }
+  }
+  FOUR_C_ASSERT(k_growth >= 0, "Could not detect SCATRA growth DOF set");
+
+  // Cache maps
+  const auto& map_struct_dof = *structure_field()->discretization()->dof_row_map(k_struct_disp);
+  const auto& map_growth_dof = *scatra_field()->discretization()->dof_row_map(k_growth);
+  const auto& map_scatra_node = *scatra_field()->discretization()->node_row_map();
+  const auto& map_struct_node = *structure_field()->discretization()->node_row_map();
+
+  // Sanity: structure target vector must match the struct DOF map
+  Core::LinAlg::Vector<double> u_growth_struct_like = *structure_field()->dispnp();
+  FOUR_C_ASSERT(
+      u_growth_struct_like.get_map().same_as(map_struct_dof), "Structure vector map mismatch");
+  u_growth_struct_like.put_scalar(0.0);
+
+  // Dimension consistency
+  auto nsd_u = structure_field()->discretization()->n_dim();
+  const int nsd = static_cast<int>(nsd_u);
+  // auto nsd_g = scatra_field()->discretization()->n_dim();
+  FOUR_C_ASSERT(nsd_u == scatra_field()->discretization()->n_dim(), "NSD mismatch");
+
+  const auto* any_node = scatra_field()->discretization()->g_node(
+      scatra_field()->discretization()->node_row_map()->gid(0));
+
+  std::vector<int> g_gids;
+  for (int d = 0; d < nsd; ++d)
+    g_gids.push_back(scatra_field()->discretization()->dof(k_growth, any_node, d));
+
+  for (int a = 0; a < nsd; ++a)
+    for (int b = a + 1; b < nsd; ++b)
+      FOUR_C_ASSERT(g_gids[a] != g_gids[b], "SCATRA growth set is not an vector.");
+
+  // Mapping with verification output
+  const long long nloc_nodes_scatra = static_cast<long long>(map_scatra_node.num_my_elements());
+  const long long nloc_nodes_struct = static_cast<long long>(map_struct_node.num_my_elements());
+
+  long long copied = 0, missing = 0;
+  double sum_g = 0.0, min_g = std::numeric_limits<double>::infinity();
+  double max_g = -std::numeric_limits<double>::infinity();
+
+  // Print details only for the first few nodes to keep logs readable
+  const int print_first_n_nodes = 10;
+  int printed = 0;
+
+  std::cout << "\n[SSI][Map] --- begin mapping growth->structure ---\n";
+  std::cout << "[SSI][Map] sets: k_growth=" << k_growth << "  k_struct_disp=" << k_struct_disp
+            << "  nsd=" << nsd << '\n';
+  std::cout << "[SSI][Map] local scatra nodes: " << nloc_nodes_scatra << '\n';
+  std::cout << "[SSI][Map] local structure nodes: " << nloc_nodes_struct << '\n';
+
+  for (long long lid_node_scatra = 0; lid_node_scatra < nloc_nodes_scatra; ++lid_node_scatra)
+  {
+    const int node_gid = map_scatra_node.gid(static_cast<int>(lid_node_scatra));
+
+    // Node must exist on both discretizations
+    if (!scatra_field()->discretization()->have_global_node(node_gid))
+    {
+      ++missing;
+      continue;
+    }
+    if (!structure_field()->discretization()->have_global_node(node_gid))
+    {
+      ++missing;
+      continue;
+    }
+
+    const Core::Nodes::Node* node_scatra = scatra_field()->discretization()->g_node(node_gid);
+    const Core::Nodes::Node* node_struct = structure_field()->discretization()->g_node(node_gid);
+    if (!node_scatra || !node_struct)
+    {
+      ++missing;
+      continue;
+    }
+
+    // For optional per-node printout
+    std::array<double, 3> g_loc = {0., 0., 0.};
+    std::array<double, 3> u_loc = {0., 0., 0.};
+    bool printed_this = false;
+
+    for (int dim = 0; dim < nsd; ++dim)
+    {
+      // Resolve DOF GIDs for the correct sets and this component
+      const int gid_growth = scatra_field()->discretization()->dof(k_growth, node_scatra, dim);
+      const int gid_struct =
+          structure_field()->discretization()->dof(k_struct_disp, node_struct, dim);
+
+      // Convert to local IDs on this MPI rank
+      const int lid_growth = map_growth_dof.lid(gid_growth);
+      const int lid_struct = map_struct_dof.lid(gid_struct);
+
+      if (lid_struct < 0)
+      {
+        ++missing;
+        continue;
+      }  // struct DOF not owned here
+
+      const double val = (lid_growth >= 0) ? g_growth[(size_t)lid_growth] : 0.0;
+      u_growth_struct_like[(size_t)lid_struct] = val;
+
+      // stats
+      sum_g += val;
+      min_g = std::min(min_g, val);
+      max_g = std::max(max_g, val);
+      std::cout << std::setprecision(6) << "[SSI][Map][node GID " << node_gid << "] "
+                << "val = " << val << ", "
+                << "u_struct_like = " << u_growth_struct_like[(size_t)lid_struct] << ",  "
+                << "g_growth = " << g_growth[(size_t)lid_growth] << "\n";
+      ++copied;
+
+      if (dim < 3)
+      {
+        g_loc[dim] = val;
+        u_loc[dim] = val;
+      }
+      printed_this = true;
+    }
+
+    // Show the first few mapped nodes
+    if (printed < print_first_n_nodes && printed_this)
+    {
+      std::cout << std::setprecision(6) << "[SSI][Map][node GID " << node_gid << "] "
+                << "u_struct_like = (" << u_loc[0] << ", " << u_loc[1] << ", " << u_loc[2] << ")  "
+                << "<- growth = (" << g_loc[0] << ", " << g_loc[1] << ", " << g_loc[2] << ")\n";
+      ++printed;
+    }
+
+    // show first non-zero mapped nodes
+    const double eps = 1e-6;
+    if (printed < print_first_n_nodes)
+    {
+      bool any_pos = false;
+      for (int d = 0; d < nsd; ++d)
+      {
+        if (u_loc[d] > eps)
+        {
+          any_pos = true;
+          break;
+        }
+      }
+      if (any_pos)
+      {
+        std::cout << std::setprecision(6) << "[SSI][Map][node GID " << node_gid << "] "
+                  << "u_struct_like = (" << u_loc[0] << ", " << u_loc[1] << ", " << u_loc[2]
+                  << ")  "
+                  << "<- growth = (" << g_loc[0] << ", " << g_loc[1] << ", " << g_loc[2] << ")\n";
+        ++printed;
+      }
+    }
+  }
+
+  double gmin = std::numeric_limits<double>::infinity();
+  double gmax = -std::numeric_limits<double>::infinity();
+  for (int lid = 0; lid < (int)g_growth.get_map().num_my_elements(); ++lid)
+  {
+    const double v = g_growth[(size_t)lid];
+    gmin = std::min(gmin, v);
+    gmax = std::max(gmax, v);
+  }
+  std::cout << std::setprecision(6) << "[src] g_growth local min=" << gmin << " max=" << gmax
+            << "\n";
+
+  double umin = std::numeric_limits<double>::infinity();
+  double umax = -std::numeric_limits<double>::infinity();
+
+  const auto& umap = u_growth_struct_like.get_map();
+  const int nloc = (int)umap.num_my_elements();
+
+  for (int lid = 0; lid < nloc; ++lid)
+  {
+    const double v = u_growth_struct_like[(size_t)lid];
+    umin = std::min(umin, v);
+    umax = std::max(umax, v);
+  }
+
+  std::cout << std::setprecision(6) << "[DST u(local)] min/max = " << umin << " / " << umax << "\n";
+
+  // Vector norms (uses the vector's own norm implementation)
+  double norm_u2 = 0.0;
+  u_growth_struct_like.norm_2(&norm_u2);
+  double norm_g2 = 0.0;
+  // const double rel_diff = std::abs(norm_u2 - norm_g2) / std::max(norm_u2, norm_g2);
+  g_growth.norm_2(&norm_g2);
+  std::cout << std::setprecision(6) << "[check] ||u_map||2= " << norm_u2 << ", ||g||2=" << norm_g2
+            << "\n";
+
+  std::cout << std::setprecision(6) << "[SSI][Map] copied=" << copied << "  missing=" << missing
+            << "  ||u_map||2=" << norm_u2 << "  sum(g)=" << sum_g << "  min(g)=" << min_g
+            << "  max(g)=" << max_g << '\n';
+  std::cout << "[SSI][Map] --- end mapping growth->structure ---\n";
+
+  const bool is_row = u_growth_struct_like.get_map().same_as(
+      *structure_field()->discretization()->dof_row_map(k_struct_disp));
+  const bool is_col = u_growth_struct_like.get_map().same_as(
+      *structure_field()->discretization()->dof_col_map(k_struct_disp));
+
+  std::cout << std::boolalpha << "[map] u_like is ROW? " << is_row << "  |  is COL? " << is_col
+            << "\n";
+
+  */
+
+  /*
+  // ----------------------------------------------- hereeeeee mapping importer based implemented
+  // Test
+  // get all dof sets lid->gid
+  auto disc_scatra = scatra_field()->discretization();
+  const int nsets = disc_scatra->num_dof_sets();
+
+  for (int k = 0; k < nsets; ++k)
+  {
+    const auto& map_k = *disc_scatra->dof_row_map(k);
+    const int nloc = (int)map_k.num_my_elements();
+    std::cout << "[Test Scatra] SET " << k << "  nloc=" << nloc << '\n';
+
+    const int nprint = std::min(nloc, 10);  // nur die ersten paar
+    for (int lid = 0; lid < nprint; ++lid)
+    {
+      const auto gid = map_k.gid(lid);
+      std::cout << "[Scatra]  lid=" << lid << " -> gid=" << gid << '\n';
+    }
+  }
+
+  auto disc_struct = structure_field()->discretization();
+  const int nsets_s = disc_struct->num_dof_sets();
+
+  for (int k = 0; k < nsets_s; ++k)
+  {
+    const auto& map_k = *disc_struct->dof_row_map(k);
+    const int nloc = (int)map_k.num_my_elements();
+    std::cout << "[Test Struct] SET " << k << "  nloc=" << nloc << '\n';
+
+    const int nprint = std::min(nloc, 10);  // nur die ersten paar
+    for (int lid = 0; lid < nprint; ++lid)
+    {
+      const auto gid = map_k.gid(lid);
+      std::cout << "[Struct]  lid=" << lid << " -> gid=" << gid << '\n';
+    }
+  }
+
+  // Detect STRUCT displacement DOF set from the disp vector's map
+  const Core::LinAlg::Vector<double>& u_struct = *structure_field()->dispnp();
+  const auto& disp_map = u_struct.get_map();
+  const Core::LinAlg::Vector<double>& g_growth = scatra_field()->get_simplgrowthnp();
+  int k_struct = -1;
+  for (int k = 0; k < nsets_s; ++k)
+  {
+    if (disp_map.same_as(*structure_field()->discretization()->dof_row_map(k)))
+    {
+      k_struct = k;
+      break;
+    }
+  }
+  std::cout << "[DBG] k_struct detected as " << k_struct << '\n';
+  FOUR_C_ASSERT(k_struct >= 0, "Could not detect STRUCT displacement DOF set");
+
+  // Detect SCATRA growth DOF set from g_growth's map
+  int k_growth = -1;
+  for (int k = 0; k < nsets; ++k)
+  {
+    if (g_growth.get_map().same_as(*scatra_field()->discretization()->dof_row_map(k)))
+    {
+      k_growth = k;
+      break;
+    }
+  }
+  std::cout << "[DBG] k_growth detected as " << k_growth << '\n';
+  FOUR_C_ASSERT(k_growth >= 0, "Could not detect SCATRA growth DOF set");
+
+  // Cache maps
+  const auto& map_struct_dof = *structure_field()->discretization()->dof_row_map(k_struct);
+  const int nloc_test = (int)map_struct_dof.num_my_elements();
+  std::cout << "[Test Struct dispnp k_struct] SET " << k_struct << "  nloc=" << nloc_test << '\n';
+
+  const int nprint = std::min(nloc_test, 10);  // nur die ersten paar
+  for (int lid = 0; lid < nprint; ++lid)
+  {
+    const auto gid = map_struct_dof.gid(lid);
+    std::cout << "[Struct]  lid=" << lid << " -> gid=" << gid << '\n';
+  }
+  const auto& map_growth_dof = *scatra_field()->discretization()->dof_row_map(k_growth);
+  const int nloc_test2 = (int)map_growth_dof.num_my_elements();
+  std::cout << "[Test Scatra growth k_growth] SET " << k_growth << "  nloc=" << nloc_test2 << '\n';
+
+  const int nprint2 = std::min(nloc_test2, 10);  // nur die ersten paar
+  for (int lid = 0; lid < nprint2; ++lid)
+  {
+    const auto gid = map_growth_dof.gid(lid);
+    std::cout << "[Scatra]  lid=" << lid << " -> gid=" << gid << '\n';
+  }
+  // const auto& map_scatra_node = *scatra_field()->discretization()->node_row_map();
+  // const auto& map_struct_node = *structure_field()->discretization()->node_row_map();
+
+  // Test which node which dof-gids
+  const auto* s_nmap = structure_field()->discretization()->node_row_map();
+  const int nshow_nodes = std::min<int>(s_nmap->num_my_elements(), 5);
+
+  for (int i = 0; i < nshow_nodes; ++i)
+  {
+    const int node_gid = s_nmap->gid(i);
+    if (!scatra_field()->discretization()->have_global_node(node_gid)) continue;
+
+    const auto* nS = structure_field()->discretization()->g_node(node_gid);
+    const auto* nG = scatra_field()->discretization()->g_node(node_gid);
+    if (!nS || !nG) continue;
+
+    std::cout << "[DBG] node_gid=" << node_gid << '\n';
+
+    // show components of both sets
+    for (int d = 0; d < 3; ++d)
+    {
+      int gidS = structure_field()->discretization()->dof(k_struct, nS, d);
+      int gidG = scatra_field()->discretization()->dof(k_growth, nG, d);
+
+      int lidS = structure_field()->dispnp()->get_map().lid(gidS);
+      int lidG = scatra_field()->get_simplgrowthnp().get_map().lid(gidG);
+
+      std::cout << "  comp " << d << "  struct gid=" << gidS << " (lid=" << lidS << ")"
+                << " | growth gid=" << gidG << " (lid=" << lidG << ")\n";
+    }
+  }
+
+  // target map for struct solution (= structural dofrow map)
+  // take map of vector with right map
+  const auto& target_struct_map = structure_field()->dispnp()->get_map();
+  std::cout << "[SSI][Map] target map for struct solution has "
+            << target_struct_map.num_my_elements() << " local elements." << std::endl;
+
+  // start conversion of vector with target map (structure)
+  Core::LinAlg::Vector<double> growth_on_struct(target_struct_map);
+  growth_on_struct.put_scalar(0.0);
+  std::cout << "[SSI][Map] growth_on_struct vector created with "
+            << growth_on_struct.get_map().num_my_elements() << " local elements." << std::endl;
+
+  // Build Importer: target (struct row map), source (scatra growth map)
+  Core::LinAlg::Import importer_growth(
+      target_struct_map, scatra_field()->get_simplgrowthnp().get_map());
+
+  // Bring data over
+  growth_on_struct.import(scatra_field()->get_simplgrowthnp(), importer_growth, Insert);
+
+  // Debug
+  auto src_map = scatra_field()->get_simplgrowthnp().get_map();
+  auto dst_map = growth_on_struct.get_map();
+
+  // count GID overlap
+  std::set<long long> src_gids;
+
+  long long overlap = 0;
+  for (int i = 0; i < (int)dst_map.num_my_elements(); ++i)
+  {
+    const auto gid = dst_map.gid(i);
+    // if source map knows this GID locally, the lid>=0
+    if (src_map.lid(gid) >= 0) ++overlap;
+  }
+
+  std::cout << "[SSI] GID overlap (local) src<->dst = " << overlap << " / "
+            << dst_map.num_my_elements() << '\n';
+  std::cout << "[SSI] Import growth -> struct\n";
+  std::cout << "      src: glob=" << scatra_field()->get_simplgrowthnp().global_length()
+            << " loc=" << src_map.num_my_elements() << '\n';
+  std::cout << "      dst: glob=" << growth_on_struct.global_length()
+            << " loc=" << growth_on_struct.get_map().num_my_elements() << '\n';
+
+  // node IDS
+  const auto* s_nm = structure_field()->discretization()->node_row_map();
+  const auto* g_nm = scatra_field()->discretization()->node_row_map();
+  int nloc = std::min<int>(s_nm->num_my_elements(), 10);
+  for (int i = 0; i < nloc; ++i)
+  {
+    int gidS = s_nm->gid(i);
+    int lidG = g_nm->lid(gidS);
+    std::cout << "[DBG] node gid " << gidS << " exists in ScaTra? " << (lidG >= 0) << "\n";
+  }
+
+  // map sanity check
+  FOUR_C_ASSERT(
+      growth_on_struct.get_map().same_as(target_struct_map), "Map mismatch after import!");
+
+  double n2_src = 0.0, n2_dst = 0.0, n1_src = 0.0, n1_dst = 0.0;
+  scatra_field()->get_simplgrowthnp().norm_2(&n2_src);
+  growth_on_struct.norm_2(&n2_dst);
+  scatra_field()->get_simplgrowthnp().norm_1(&n1_src);
+  growth_on_struct.norm_1(&n1_dst);
+
+  std::cout << std::setprecision(6) << "[SSI] norms: ||src||2=" << n2_src << "  ||dst||2=" << n2_dst
+            << "  ||src||1=" << n1_src << "  ||dst||1=" << n1_dst << '\n';
+
+  // example printout from first 5 entries
+  const int nprint_3 = std::min(5, nloc);
+  for (int lid = 0; lid < nprint_3; ++lid)
+  {
+    const int gid = growth_on_struct.get_map().gid(lid);
+    const double v = growth_on_struct[(size_t)lid];
+    std::cout << "[SSI] dst[lid=" << lid << " gid=" << gid << "] = " << v << '\n';
+  }
+
+  // print statistics on positive entries
+  const double eps = 1e-12;
+  const int max_print = 20;  // max number of positive entries to print
+  long long cnt_pos = 0;
+  double sum_pos = 0.0;
+  double min_pos = std::numeric_limits<double>::infinity();
+  double max_pos = -std::numeric_limits<double>::infinity();
+
+  int printed = 0;
+  for (int lid = 0; lid < nloc; ++lid)
+  {
+    const double v = growth_on_struct[(size_t)lid];
+    if (v > eps)
+    {
+      ++cnt_pos;
+      sum_pos += v;
+      min_pos = std::min(min_pos, v);
+      max_pos = std::max(max_pos, v);
+
+      if (printed < max_print)
+      {
+        const int gid = growth_on_struct.get_map().gid(lid);
+        std::cout << "[SSI] dst>0  lid=" << lid << " gid=" << gid << " val=" << std::setprecision(6)
+                  << v << '\n';
+        ++printed;
+      }
+    }
+  }
+
+  if (cnt_pos == 0)
+  {
+    std::cout << "[SSI] dst>0  no positive entries with (eps=" << eps << ")\n";
+  }
+  else
+  {
+    const double mean_pos = sum_pos / static_cast<double>(cnt_pos);
+    std::cout << std::setprecision(6) << "[SSI] dst>0  count=" << cnt_pos << " min=" << min_pos
+              << " max=" << max_pos << " mean=" << mean_pos << " (eps=" << eps
+              << ", max_print=" << max_print << ")\n";
+  }
+
+  // NaN/Inf-Check
+  int bad = 0;
+  for (int lid = 0; lid < nloc; ++lid)
+  {
+    const double v = growth_on_struct[(size_t)lid];
+    if (!std::isfinite(v)) ++bad;
+  }
+  if (bad > 0) std::cout << "[SSI] WARNING: " << bad << " non-finite entries in dst\n";
+
   // distribute states to other fields
-  set_struct_solution(*structure_field()->dispnp(), structure_field()->velnp(),
-      is_s2i_kinetics_with_pseudo_contact());
+  set_struct_solution(
+      growth_on_struct, structure_field()->velnp(), is_s2i_kinetics_with_pseudo_contact());
+  */
+
+  // ----------------------------------------------- hereeeeee mapping tryy again node-based
+  // implemented Test get all dof sets lid->gid
+  auto disc_scatra = scatra_field()->discretization();
+  const int nsets_scatra = disc_scatra->num_dof_sets();
+
+  for (int k = 0; k < nsets_scatra; ++k)
+  {
+    const auto& map_k = *disc_scatra->dof_row_map(k);
+    const int nloc = (int)map_k.num_my_elements();
+    std::cout << "[Test Scatra] SET " << k << "  nloc=" << nloc << '\n';
+
+    const int nprint = std::min(nloc, 10);  // nur die ersten paar
+    for (int lid = 0; lid < nprint; ++lid)
+    {
+      const auto gid = map_k.gid(lid);
+      std::cout << "[Scatra]  lid=" << lid << " -> gid=" << gid << '\n';
+    }
+  }
+
+  auto disc_struct = structure_field()->discretization();
+  const int nsets_struct = disc_struct->num_dof_sets();
+
+  for (int k = 0; k < nsets_struct; ++k)
+  {
+    const auto& map_k = *disc_struct->dof_row_map(k);
+    const int nloc = (int)map_k.num_my_elements();
+    std::cout << "[Test Struct] SET " << k << "  nloc=" << nloc << '\n';
+
+    const int nprint = std::min(nloc, 10);  // nur die ersten paar
+    for (int lid = 0; lid < nprint; ++lid)
+    {
+      const auto gid = map_k.gid(lid);
+      std::cout << "[Struct]  lid=" << lid << " -> gid=" << gid << '\n';
+    }
+  }
+
+  // Detect STRUCT displacement DOF set from the disp vector's map
+  const Core::LinAlg::Vector<double>& u_struct = *structure_field()->dispnp();
+  const auto& disp_map = u_struct.get_map();
+  const Core::LinAlg::Vector<double>& g_growth = scatra_field()->get_simplgrowthnp();
+  int k_struct = -1;
+  for (int k = 0; k < nsets_struct; ++k)
+  {
+    if (disp_map.same_as(*structure_field()->discretization()->dof_row_map(k)))
+    {
+      k_struct = k;
+      break;
+    }
+  }
+  std::cout << "[DBG] k_struct detected as " << k_struct << '\n';
+  FOUR_C_ASSERT(k_struct >= 0, "Could not detect STRUCT displacement DOF set");
+
+  // Detect SCATRA growth DOF set from g_growth's map
+  int k_growth = -1;
+  for (int k = 0; k < nsets_scatra; ++k)
+  {
+    if (g_growth.get_map().same_as(*scatra_field()->discretization()->dof_row_map(k)))
+    {
+      k_growth = k;
+      break;
+    }
+  }
+  std::cout << "[DBG] k_growth detected as " << k_growth << '\n';
+  FOUR_C_ASSERT(k_growth >= 0, "Could not detect SCATRA growth DOF set");
+
+  // Cache maps
+  const auto& map_struct_dof = *structure_field()->discretization()->dof_row_map(k_struct);
+  const int nloc_test = (int)map_struct_dof.num_my_elements();
+  const auto& map_scatra_node = *scatra_field()->discretization()->node_row_map();
+  const auto& map_struct_node = *structure_field()->discretization()->node_row_map();
+  std::cout << "[Test Struct dispnp k_struct] SET " << k_struct << "  nloc=" << nloc_test << '\n';
+
+  const int nprint = std::min(nloc_test, 10);  // only first few
+  for (int lid = 0; lid < nprint; ++lid)
+  {
+    const auto gid = map_struct_dof.gid(lid);
+    std::cout << "[Struct]  lid=" << lid << " -> gid=" << gid << '\n';
+  }
+  const auto& map_growth_dof = *scatra_field()->discretization()->dof_row_map(k_growth);
+  const int nloc_test2 = (int)map_growth_dof.num_my_elements();
+  std::cout << "[Test Scatra growth k_growth] SET " << k_growth << "  nloc=" << nloc_test2 << '\n';
+
+  const int nprint2 = std::min(nloc_test2, 10);  // only first few
+  for (int lid = 0; lid < nprint2; ++lid)
+  {
+    const auto gid = map_growth_dof.gid(lid);
+    std::cout << "[Scatra]  lid=" << lid << " -> gid=" << gid << '\n';
+  }
+
+  // Test which node which dof-gids
+  const auto* s_nmap = structure_field()->discretization()->node_row_map();
+  const int nshow_nodes = std::min<int>(s_nmap->num_my_elements(), 5);
+
+  for (int i = 0; i < nshow_nodes; ++i)
+  {
+    const int node_gid = s_nmap->gid(i);
+    if (!scatra_field()->discretization()->have_global_node(node_gid)) continue;
+
+    const auto* nS = structure_field()->discretization()->g_node(node_gid);
+    const auto* nG = scatra_field()->discretization()->g_node(node_gid);
+    if (!nS || !nG) continue;
+
+    std::cout << "[DBG] node_gid=" << node_gid << '\n';
+
+    // show components of both sets
+    for (int d = 0; d < 3; ++d)
+    {
+      int gidS = structure_field()->discretization()->dof(k_struct, nS, d);
+      int gidG = scatra_field()->discretization()->dof(k_growth, nG, d);
+
+      int lidS = structure_field()->dispnp()->get_map().lid(gidS);
+      int lidG = scatra_field()->get_simplgrowthnp().get_map().lid(gidG);
+
+      std::cout << "  comp " << d << "  struct gid=" << gidS << " (lid=" << lidS << ")"
+                << " | growth gid=" << gidG << " (lid=" << lidG << ")\n";
+    }
+  }
+
+  // target map for struct solution (= structural dofrow map)
+  // take map of vector with right map
+  const auto& target_struct_map = structure_field()->dispnp()->get_map();
+  std::cout << "[SSI][Map] target map for struct solution has "
+            << target_struct_map.num_my_elements() << " local elements." << std::endl;
+
+  // start conversion of vector with target map (structure)
+  Core::LinAlg::Vector<double> growth_on_struct(target_struct_map);
+  growth_on_struct.put_scalar(0.0);
+  std::cout << "[SSI][Map] growth_on_struct vector created with "
+            << growth_on_struct.get_map().num_my_elements()
+            << " local elements. Does it have the same map like target_struct_map? 1-true/0-false: "
+            << growth_on_struct.get_map().same_as(target_struct_map)
+            << ". Does it have the same map like map_struct_dof (should be same like "
+               "target_struct_map)? 1-true/0-false: "
+            << growth_on_struct.get_map().same_as(map_struct_dof) << std::endl;
+
+  // Sanity: structure target vector must match the struct DOF map
+  FOUR_C_ASSERT(
+      growth_on_struct.get_map().same_as(map_struct_dof), "Structure vector map mismatch");
+
+  // Dimension consistency
+  auto nsd_u = structure_field()->discretization()->n_dim();
+  const int nsd = static_cast<int>(nsd_u);
+  // auto nsd_g = scatra_field()->discretization()->n_dim();
+  FOUR_C_ASSERT(nsd_u == scatra_field()->discretization()->n_dim(), "NSD mismatch");
+
+  const auto* any_node = scatra_field()->discretization()->g_node(
+      scatra_field()->discretization()->node_row_map()->gid(0));
+
+  std::vector<int> g_gids;
+  for (int d = 0; d < nsd; ++d)
+    g_gids.push_back(scatra_field()->discretization()->dof(k_growth, any_node, d));
+
+  // all different?
+  for (int a = 0; a < nsd; ++a)
+    for (int b = a + 1; b < nsd; ++b)
+      FOUR_C_ASSERT(g_gids[a] != g_gids[b], "SCATRA growth set is not an vector.");
+
+  // Mapping with verification output
+  const long long nloc_nodes_scatra = static_cast<long long>(map_scatra_node.num_my_elements());
+  const long long nloc_nodes_struct = static_cast<long long>(map_struct_node.num_my_elements());
+
+  long long copied = 0, missing = 0;
+  double sum_g = 0.0, min_g = std::numeric_limits<double>::infinity();
+  double max_g = -std::numeric_limits<double>::infinity();
+
+  // Print details only for the first few nodes to keep logs readable
+  const int print_first_n_nodes = 10;
+  int printed = 0;
+
+  std::cout << "\n[SSI][Map] --- begin mapping growth->structure ---\n";
+  std::cout << "[SSI][Map] sets: k_growth=" << k_growth << "  k_struct=" << k_struct
+            << "  nsd=" << nsd << '\n';
+  std::cout << "[SSI][Map] local scatra nodes: " << nloc_nodes_scatra << '\n';
+  std::cout << "[SSI][Map] local structure nodes: " << nloc_nodes_struct << '\n';
+
+  for (long long lid_node_scatra = 0; lid_node_scatra < nloc_nodes_scatra; ++lid_node_scatra)
+  {
+    const int node_gid = map_scatra_node.gid(static_cast<int>(lid_node_scatra));
+
+    // Node must exist on both discretizations
+    if (!scatra_field()->discretization()->have_global_node(node_gid))
+    {
+      ++missing;
+      continue;
+    }
+    if (!structure_field()->discretization()->have_global_node(node_gid))
+    {
+      ++missing;
+      continue;
+    }
+
+    const Core::Nodes::Node* node_scatra = scatra_field()->discretization()->g_node(node_gid);
+    const Core::Nodes::Node* node_struct = structure_field()->discretization()->g_node(node_gid);
+    if (!node_scatra || !node_struct)
+    {
+      ++missing;
+      continue;
+    }
+
+    // For optional per-node printout
+    std::array<double, 3> g_loc = {0., 0., 0.};
+    std::array<double, 3> u_loc = {0., 0., 0.};
+    bool printed_this = false;
+
+    for (int dim = 0; dim < nsd; ++dim)
+    {
+      // Resolve DOF GIDs for the correct sets and this component
+      const int gid_growth = scatra_field()->discretization()->dof(k_growth, node_scatra, dim);
+      const int gid_struct = structure_field()->discretization()->dof(k_struct, node_struct, dim);
+
+      // Convert to local IDs on this MPI rank
+      const int lid_growth = map_growth_dof.lid(gid_growth);
+      const int lid_struct = map_struct_dof.lid(gid_struct);
+
+      if (lid_struct < 0)
+      {
+        ++missing;
+        continue;
+      }  // struct DOF not owned here
+
+      const double val = (lid_growth >= 0) ? g_growth[(size_t)lid_growth] : 0.0;
+      growth_on_struct[(size_t)lid_struct] = val;
+
+      // stats
+      sum_g += val;
+      min_g = std::min(min_g, val);
+      max_g = std::max(max_g, val);
+      std::cout << std::setprecision(6) << "[SSI][Map][node GID " << node_gid << "] "
+                << "val = " << val << ", "
+                << "u_struct_like = " << growth_on_struct[(size_t)lid_struct] << ",  "
+                << "g_growth = " << g_growth[(size_t)lid_growth] << "\n";
+      ++copied;
+
+      if (dim < 3)
+      {
+        g_loc[dim] = val;
+        u_loc[dim] = val;
+      }
+      printed_this = true;
+    }
+
+    // Show the first few mapped nodes
+    if (printed < print_first_n_nodes && printed_this)
+    {
+      std::cout << std::setprecision(6) << "[SSI][Map][node GID " << node_gid << "] "
+                << "growth_on_struct = (" << u_loc[0] << ", " << u_loc[1] << ", " << u_loc[2]
+                << ")  "
+                << "<- growth = (" << g_loc[0] << ", " << g_loc[1] << ", " << g_loc[2] << ")\n";
+      ++printed;
+    }
+
+    // show first non-zero mapped nodes
+    const double eps = 1e-6;
+    if (printed < print_first_n_nodes)
+    {
+      bool any_pos = false;
+      for (int d = 0; d < nsd; ++d)
+      {
+        if (u_loc[d] > eps)
+        {
+          any_pos = true;
+          break;
+        }
+      }
+      if (any_pos)
+      {
+        std::cout << std::setprecision(6) << "[SSI][Map][node GID " << node_gid << "] "
+                  << "growth_on_struct = (" << u_loc[0] << ", " << u_loc[1] << ", " << u_loc[2]
+                  << ")  "
+                  << "<- growth = (" << g_loc[0] << ", " << g_loc[1] << ", " << g_loc[2] << ")\n";
+        ++printed;
+      }
+    }
+  }
+
+  double gmin = std::numeric_limits<double>::infinity();
+  double gmax = -std::numeric_limits<double>::infinity();
+  for (int lid = 0; lid < (int)g_growth.get_map().num_my_elements(); ++lid)
+  {
+    const double v = g_growth[(size_t)lid];
+    gmin = std::min(gmin, v);
+    gmax = std::max(gmax, v);
+  }
+  std::cout << std::setprecision(6) << "[src] g_growth local min=" << gmin << " max=" << gmax
+            << "\n";
+
+  double umin = std::numeric_limits<double>::infinity();
+  double umax = -std::numeric_limits<double>::infinity();
+
+  const auto& umap = growth_on_struct.get_map();
+  const int nloc = (int)umap.num_my_elements();
+
+  for (int lid = 0; lid < nloc; ++lid)
+  {
+    const double v = growth_on_struct[(size_t)lid];
+    umin = std::min(umin, v);
+    umax = std::max(umax, v);
+  }
+
+  std::cout << std::setprecision(6) << "[DST growth_on_struct (local)] min/max = " << umin << " / "
+            << umax << "\n";
+
+  // Vector norms (uses the vector's own norm implementation)
+  double norm_u2 = 0.0;
+  growth_on_struct.norm_2(&norm_u2);
+  double norm_g2 = 0.0;
+  // const double rel_diff = std::abs(norm_u2 - norm_g2) / std::max(norm_u2, norm_g2);
+  g_growth.norm_2(&norm_g2);
+  std::cout << std::setprecision(6) << "[check] ||u_map||2= " << norm_u2 << ", ||g||2=" << norm_g2
+            << "\n";
+
+  std::cout << std::setprecision(6) << "[SSI][Map] copied=" << copied << "  missing=" << missing
+            << "  ||u_map||2=" << norm_u2 << "  sum(g)=" << sum_g << "  min(g)=" << min_g
+            << "  max(g)=" << max_g << '\n';
+  std::cout << "[SSI][Map] --- end mapping growth->structure ---\n";
+
+  const bool is_row = growth_on_struct.get_map().same_as(
+      *structure_field()->discretization()->dof_row_map(k_struct));
+  const bool is_col = growth_on_struct.get_map().same_as(
+      *structure_field()->discretization()->dof_col_map(k_struct));
+
+  std::cout << std::boolalpha << "[map] u_like is ROW? " << is_row << "  |  is COL? " << is_col
+            << "\n";
+
+  // structure_field()->set_state(growth_on_struct);
+
+  // distribute states to other fields
+  set_struct_solution(
+      growth_on_struct, structure_field()->velnp(), is_s2i_kinetics_with_pseudo_contact());
+  // set_struct_solution(*structure_field()->dispnp(), structure_field()->velnp(),
+  // is_s2i_kinetics_with_pseudo_contact());
   set_scatra_solution(scatra_field()->phinp());
   if (is_scatra_manifold()) set_scatra_manifold_solution(*scatra_manifold()->phinp());
 }
@@ -1383,8 +2615,8 @@ void SSI::SsiMono::calc_initial_time_derivative()
   // In a second step, we need to modify the assembled system of equations, since we want to solve
   // M phidt^0 = f^n - K\phi^n - C(u_n)\phi^n
   // In particular, we need to replace the global system matrix by a global mass matrix,
-  // and we need to remove all transient contributions associated with time discretization from the
-  // global residual vector.
+  // and we need to remove all transient contributions associated with time discretization from
+  // the global residual vector.
 
   // Evaluate mass matrix and modify residual
   scatra_field()->evaluate_initial_time_derivative(massmatrix_scatra, rhs_scatra);

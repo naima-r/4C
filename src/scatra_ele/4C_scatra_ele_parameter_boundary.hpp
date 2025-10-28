@@ -68,6 +68,7 @@ namespace Discret
       bool is_pseudo_contact() const { return is_pseudo_contact_; }
       // NAIMA: implement boolean + getter method for simplified growth conditions
       // similar to what is implemented for the pseudo-contact
+      bool has_simplified_growth_conditions() const { return has_simplified_growth_conditions_; }
       int itemaximplicit_bv() const { return itemaxmimplicit_bv_; }
       int kinetic_model() const { return kineticmodel_; }
       double molar_heat_capacity() const { return molar_heat_capacity_; }
@@ -112,6 +113,9 @@ namespace Discret
       /// indicating if pseudo contact is considered at the s2i interface, i.e. no flux if interface
       /// is under tensile stresses
       bool is_pseudo_contact_;
+
+      // Naima: indicating if simplified growth conditions are considered
+      bool has_simplified_growth_conditions_;
 
       /// maximum number of iterations of local Newton-Raphson iteration for modified Butler-Volmer
       /// equation

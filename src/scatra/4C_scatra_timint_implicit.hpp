@@ -946,6 +946,29 @@ namespace ScaTra
       return *visualization_writer_;
     }
 
+
+    //! Set simplified growth at time n
+    void set_simplgrowthn(const Core::LinAlg::Vector<double>& vector) { *simplgrowthn_ = vector; };
+
+    //! Get simplified growth at time n
+    Core::LinAlg::Vector<double> get_simplgrowthn() const { return *simplgrowthn_; };
+
+    //! Set simplified growth at time np
+    void set_simplgrowthnp(const Core::LinAlg::Vector<double>& vector)
+    {
+      *simplgrowthnp_ = vector;
+    };
+
+    //! Get simplified growth at time np
+    Core::LinAlg::Vector<double> get_simplgrowthnp() const { return *simplgrowthnp_; };
+
+    //! Get normal vectors
+    std::shared_ptr<Core::LinAlg::MultiVector<double>> get_normal_vectors(
+        const std::vector<std::string>& condnames) const
+    {
+      return compute_normal_vectors(condnames);
+    }
+
    protected:
     //! create vectors for Krylov projection if necessary
     void prepare_krylov_projection();
